@@ -1,0 +1,649 @@
+c----------------------------------------------------------------------c
+      subroutine uservp (ix,iy,iz,ieg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      return
+      end
+c----------------------------------------------------------------------c
+      subroutine userf  (ix,iy,iz,ieg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      common /switches/ IPRESTART, IDRAG, ILIFT, IGRAV, IPRES, IMASS
+     $                , ITWOWAY, IFOURWAY, IAGGLOM
+
+      common /particles_twoway/ twowayforcex(lx1,ly1,lz1,lelv)
+     $                        , twowayforcey(lx1,ly1,lz1,lelv)
+     $                        , twowayforcez(lx1,ly1,lz1,lelv)
+     $                        ,          xmc(lx1,ly1,lz1,lelv)
+     $                        ,          xxc(lx1,ly1,lz1,lelv)
+     $                        ,          ymc(lx1,ly1,lz1,lelv)
+     $                        ,          yxc(lx1,ly1,lz1,lelv)
+     $                        ,          zmc(lx1,ly1,lz1,lelv)
+     $                        ,          zxc(lx1,ly1,lz1,lelv)
+     $                        ,          vol(lx1,ly1,lz1,lelv)
+     $                        ,         inpc(lx1,ly1,lz1,lelv)
+     $                        ,    ipartrefp(ldim*2,lpart)
+
+      common /cforce/ ffx_new, ffy_new, ffz_new
+
+      integer iel
+
+c     === TWO WAY COUPLING IS OFF ===
+      	ffx = (180.0/2800.0)**2
+      	ffy = 0.0
+      	ffz = 0.0
+
+c     === TWO WAY COUPLING IS ON ===
+      if(ITWOWAY .EQ. 1) then
+
+        iel = gllel(ieg)
+
+      	if(inpc(ix,iy,iz,iel) .GT. 0) then
+        	ffx = (180.0/2800.0)**2 
+     $              + twowayforcex(ix,iy,iz,iel)
+        	ffy = 0.0 + twowayforcey(ix,iy,iz,iel)
+      		ffz = 0.0 + twowayforcez(ix,iy,iz,iel)
+      	endif
+
+c      	if(nid.eq.0 .AND. inpc(ix,iy,iz,iel) .GT. 0) then
+c      		write(*,*) 'Cell: ',ix,iy,iz,iel
+c      		write(*,*) 'N: ',inpc(ix,iy,iz,iel)
+c      		write(*,*) 'ffx: ',twowayforcex(ix,iy,iz,iel)
+c      		write(*,*) 'ffy: ',twowayforcey(ix,iy,iz,iel)
+c      		write(*,*) 'ffz: ',twowayforcez(ix,iy,iz,iel)
+c      	endif
+
+      endif
+
+      return
+      end
+c----------------------------------------------------------------------c
+      subroutine userq  (ix,iy,iz,ieg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      qvol   = 0.0
+      source = 0.0
+
+      return
+      end
+c----------------------------------------------------------------------c
+      subroutine userchk
+      include 'SIZE'
+      include 'TOTAL'
+      include 'ZPER'  ! for nelx,nely,nelz
+
+      real x0(3)
+      save x0
+
+      integer icalld
+      save    icalld
+      data    icalld /0/
+
+      character*1   snam1(80)
+      character*1   f1nam1(80),f2nam1(80)
+      character*80  f1name
+      equivalence  (f1nam1,f1name)
+      character*80  f2name
+      equivalence  (f2nam1,f2name)
+
+      real atime,timel
+      save atime,timel
+
+      integer icount
+      save    icount
+
+      common /cdsmag/ ediff(lx1,ly1,lz1,lelv)
+      common /cforce/ ffx_new, ffy_new, ffz_new
+
+      common /plane/  uavg_pl(ly1*lely)
+     $             ,  urms_pl(ly1*lely)
+     $             ,  vrms_pl(ly1*lely)
+     $             ,  wrms_pl(ly1*lely)
+     $             ,  uvms_pl(ly1*lely)
+     $             ,  yy(ly1*lely)
+     $             ,  w1(ly1*lely),w2(ly1*lely)
+     $             ,  ffx_avg, dragx_avg 
+
+      common /avg/    uavg(lx1,ly1,lz1,lelv)
+     &             ,  urms(lx1,ly1,lz1,lelv)
+     &             ,  vrms(lx1,ly1,lz1,lelv)
+     &             ,  wrms(lx1,ly1,lz1,lelv)
+     &             ,  uvms(lx1,ly1,lz1,lelv)
+
+      common /ctorq/ dragx(0:maxobj),dragpx(0:maxobj),dragvx(0:maxobj)
+     $             , dragy(0:maxobj),dragpy(0:maxobj),dragvy(0:maxobj)
+     $             , dragz(0:maxobj),dragpz(0:maxobj),dragvz(0:maxobj)
+     $             , torqx(0:maxobj),torqpx(0:maxobj),torqvx(0:maxobj)
+     $             , torqy(0:maxobj),torqpy(0:maxobj),torqvy(0:maxobj)
+     $             , torqz(0:maxobj),torqpz(0:maxobj),torqvz(0:maxobj)
+     $             , dpdx_mean,dpdy_mean,dpdz_mean
+     $             , dgtq(3,4)
+
+      integer e
+      logical ifverbose
+      common /gaaa/    wo1(lx1,ly1,lz1,lelv)
+     &              ,  wo2(lx1,ly1,lz1,lelv)
+     &              ,  wo3(lx1,ly1,lz1,lelv)
+
+      n=nx1*ny1*nz1*nelv
+
+      pi    = 4.*atan(1.0)
+      rho   = 1.0
+      dnu   = param(2)
+      delta = 1.0 ! CHANNEL HALF HEIGHT
+      A_w = 84.0D0 ! WALL AREA
+
+      nelx = 27
+      nely = 18
+      nelz = 23       
+
+      ntot = nx1*ny1*nz1*nelv 
+
+      !=== CHECK ELEMENT NUMBERS ARE CORRECT ===!
+      if (istep.eq.0) then
+      	if(mod(nely,2).ne.0) then
+        	if(nid.eq.0) write(6,*) 'ABORT: nely has to be even!'
+          call exitt
+        endif
+      	if(nelx.gt.lelx .or. nely.gt.lely .or. nelz.gt.lelz) then
+        	if(nid.eq.0) write(6,*) 'ABORT: nel_xyz > lel_xyz!'
+          call exitt
+        endif
+      endif
+
+c=======================================================================c
+c....................... CALL PARTICLE TRACKER .........................c
+c=======================================================================c
+
+      call lpt_main
+
+c=======================================================================c
+c........................... POSTPROCESSING ............................c
+c=======================================================================c
+
+      if(mod(istep,iostep).eq.0 .and. istep.gt.0) then
+        ! compute lambda2 vortex
+        call lambda2(t(1,1,1,1,2))
+        ! compute vorticity --- 3 components returned in t(...)
+        if(ldimt.ge.5) call comp_vort3(t(1,1,1,1,3),wo1,wo2,vx,vy,vz)
+      endif
+
+      if (istep.eq.0) then
+         call set_obj                   ! objects for surface integrals
+         call rzero(x0,3)               ! torque w.r.t. x0
+      endif
+
+      ifxyo = .true.                        ! Turn on xyz output
+      if (istep.gt.iostep) ifxyo = .false.  ! Turn off xyz output after first dump
+
+      if(icalld.eq.0) then
+        call rzero(uavg,n)
+        call rzero(urms,n)
+        call rzero(vrms,n)
+        call rzero(wrms,n)
+        call rzero(uvms,n)
+        atime = 0.
+        timel = time
+        call planar_average_s(yy     ,ym1 ,w1,w2)
+        icalld = 1
+      endif
+
+      dtime = time - timel
+      atime = atime + dtime
+
+      if (atime.ne.0. .and. dtime.ne.0.) then
+        beta      = dtime/atime
+        alpha     = 1.-beta
+        ifverbose = .false.
+
+        call avg1(uavg,vx   ,alpha,beta,n,'uavg',ifverbose)
+        call avg2(urms,vx   ,alpha,beta,n,'urms',ifverbose)
+        call avg2(vrms,vy   ,alpha,beta,n,'vrms',ifverbose)
+        call avg2(wrms,vz   ,alpha,beta,n,'wrms',ifverbose)
+        call avg3(uvms,vx,vy,alpha,beta,n,'uvmm',ifverbose)
+
+        dragx_avg = alpha*dragx_avg + beta*0.5*(dragx(1)+dragx(2))
+
+        ! averaging over statistical homogeneous directions (r-t)
+        call planar_average_s(uavg_pl,uavg,w1,w2)
+        call planar_average_s(urms_pl,urms,w1,w2)
+        call planar_average_s(vrms_pl,vrms,w1,w2)
+        call planar_average_s(wrms_pl,wrms,w1,w2)
+        call planar_average_s(uvms_pl,uvms,w1,w2)
+
+        ! average over half the channel height
+        m = ny1*nely
+        do i=1,ny1*nely/2
+           uavg_pl(i) = 0.5 * (uavg_pl(i) + uavg_pl(m-i+1))
+           urms_pl(i) = 0.5 * (urms_pl(i) + urms_pl(m-i+1))
+           vrms_pl(i) = 0.5 * (vrms_pl(i) + vrms_pl(m-i+1))
+           wrms_pl(i) = 0.5 * (wrms_pl(i) + wrms_pl(m-i+1))
+        enddo
+      endif
+
+      tw = dragx_avg/A_w + 1.e-50
+      u_tau = sqrt(tw/rho)
+      Re_tau = u_tau*delta/dnu
+
+      ! write statistics to file
+      iostep_avg = param(68)
+      if (nid.eq.0 .and. istep.gt.0 .and. 
+     &   mod(istep,iostep_avg).eq.0) then
+         write(6,*) 'Dumping statistics ....'
+         open(unit=56,file='reystresses.dat')
+         write(56,'(A,1pe14.7)') '#time = ', time
+         write(56,'(A)')
+     &   '#  y     y+     R_uu     R_vv     R_ww     R_uv'
+         open(unit=57,file='means.dat')
+         write(57,'(A,1pe14.7)') '#time = ', time
+         write(57,'(A)')
+     &   '#  y     y+    Umean'
+
+         m = ny1*nely/2
+         do i=1,m
+            write(56,3) yy(i)+1.0
+     &                ,(yy(i)+1)*param(2) 
+     &                , (urms_pl(i)-(uavg_pl(i))**2)
+     &                , vrms_pl(i)
+     &                , wrms_pl(i)
+     &                , uvms_pl(i)
+            write(57,3)  yy(i) + 1.
+     &                , (yy(i)+1.0)
+     &                , uavg_pl(i)
+    3       format(1p15e17.9)
+        enddo
+
+        close(56)
+        close(57)
+
+        timel = time
+
+      endif
+
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine userbc (ix,iy,iz,iside,ieg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+      ux=0.0
+      uy=0.0
+      uz=0.0
+
+      temp=0.0
+
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine useric (ix,iy,iz,ieg)
+      include 'SIZE'
+      include 'TOTAL'
+      include 'NEKUSE'
+
+c     === CHAOTIC INITIAL PROFILE ===
+      ux = 5*(1-y**4)/4 + 0.3*cos(12*z)*
+     &exp(0.5-32.4*(1-abs(y))**2)*(1-abs(y))
+
+      uy = 0
+
+      uz = 21.6*sin(12*x)*
+     &exp(-32.4*(1-abs(y))**2)*(1-abs(y))
+
+      temp=0
+
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine usrdat
+      include 'SIZE'
+      include 'TOTAL'
+
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine usrdat2
+      include 'SIZE'
+      include 'TOTAL'
+
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine usrdat3
+      include 'SIZE'
+      include 'TOTAL'
+
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine set_obj  ! define objects for surface integrals
+c
+      include 'SIZE'
+      include 'TOTAL'
+c
+      integer e,f
+c
+c     Define new objects
+c
+      nobj = 2			! for Periodic
+      iobj = 0
+      do ii=nhis+1,nhis+nobj
+         iobj = iobj+1
+         hcode(10,ii) = 'I'
+         hcode( 1,ii) = 'F' ! 'F'
+         hcode( 2,ii) = 'F' ! 'F'
+         hcode( 3,ii) = 'F' ! 'F'
+         lochis(1,ii) = iobj
+      enddo
+      nhis = nhis + nobj
+c
+      if (maxobj.lt.nobj) write(6,*) 'increase maxobj in SIZEu. rm *.o'
+      if (maxobj.lt.nobj) call exitt
+c
+      nxyz = nx1*ny1*nz1
+      do e=1,nelv
+      do f=1,2*ndim
+         if (cbc(f,e,1).eq.'W  ') then
+            iobj = 0
+            if (f.eq.1) iobj=1  ! lower wall
+            if (f.eq.3) iobj=2  ! upper wall
+            if (iobj.gt.0) then
+               nmember(iobj) = nmember(iobj) + 1
+               mem = nmember(iobj)
+               ieg = lglel(e)
+               object(iobj,mem,1) = ieg
+               object(iobj,mem,2) = f
+c              write(6,1) iobj,mem,f,ieg,e,nid,' OBJ'
+    1          format(6i9,a4)
+            endif
+c
+         endif
+      enddo
+      enddo
+c     write(6,*) 'number',(nmember(k),k=1,4)
+c
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine planar_average_r(ua,u,w1,w2)
+c
+c     Compute s-t planar average of quantity u()
+c
+      include 'SIZE'
+      include 'GEOM'
+      include 'PARALLEL'
+      include 'WZ'
+      include 'ZPER'
+c
+      real ua(nx1,nelx),u(nx1,ny1,nx1,nelv),w1(nx1,nelx),w2(nx1,nelx)
+      integer e,eg,ex,ey,ez
+c
+      nx = nx1*nelx
+      call rzero(ua,nx)
+      call rzero(w1,nx)
+c
+      do e=1,nelt
+c
+         eg = lglel(e)
+         call get_exyz(ex,ey,ez,eg,nelx,nely,nelz)
+c
+         do i=1,nx1
+         do k=1,nz1
+         do j=1,ny1
+            zz = (1.-zgm1(i,1))/2.  ! = 1 for i=1, = 0 for k=nx1
+            aa = zz*area(j,k,4,e) + (1-zz)*area(j,k,2,e)  ! wgtd jacobian
+            w1(i,ex) = w1(i,ex) + aa
+            ua(i,ex) = ua(i,ex) + aa*u(i,j,k,e)
+         enddo
+         enddo
+         enddo
+      enddo
+c
+      call gop(ua,w2,'+  ',nx)
+      call gop(w1,w2,'+  ',nx)
+c
+      do i=1,nx
+         ua(i,1) = ua(i,1) / w1(i,1)   ! Normalize
+      enddo
+c
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine planar_average_s(ua,u,w1,w2)
+c
+c     Compute r-t planar average of quantity u()
+c
+      include 'SIZE'
+      include 'GEOM'
+      include 'PARALLEL'
+      include 'WZ'
+      include 'ZPER'
+c
+      real ua(ny1,nely),u(nx1,ny1,nx1,nelv),w1(ny1,nely),w2(ny1,nely)
+      integer e,eg,ex,ey,ez
+c
+      ny = ny1*nely
+      call rzero(ua,ny)
+      call rzero(w1,ny)
+c
+      do e=1,nelt
+         eg = lglel(e)
+         call get_exyz(ex,ey,ez,eg,nelx,nely,nelz)
+c
+         do k=1,nz1
+         do j=1,ny1
+         do i=1,nx1
+            zz = (1.-zgm1(j,2))/2.  ! = 1 for i=1, = 0 for k=nx1
+            aa = zz*area(i,k,1,e) + (1-zz)*area(i,k,3,e)  ! wgtd jacobian
+            w1(j,ey) = w1(j,ey) + aa
+            ua(j,ey) = ua(j,ey) + aa*u(i,j,k,e)
+         enddo
+         enddo
+         enddo
+      enddo
+c
+      call gop(ua,w2,'+  ',ny)
+      call gop(w1,w2,'+  ',ny)
+c
+      do i=1,ny
+         ua(i,1) = ua(i,1) / w1(i,1)   ! Normalize
+      enddo
+
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine planar_fill_s(u,ua)
+c
+c     Fill array u with planar values from ua().
+c     For tensor-product array of spectral elements
+c
+      include 'SIZE'
+      include 'GEOM'
+      include 'PARALLEL'
+      include 'WZ'
+      include 'ZPER'
+
+
+      real u(nx1,ny1,nz1,nelv),ua(ly1,lely)
+
+      integer e,eg,ex,ey,ez
+
+      melxyz = nelx*nely*nelz
+      if (melxyz.ne.nelgt) then
+         write(6,*) nid,' Error in planar_fill_s'
+     $                 ,nelgt,melxyz,nelx,nely,nelz
+         call exitt
+      endif
+
+      do e=1,nelt
+         eg = lglel(e)
+         call get_exyz(ex,ey,ez,eg,nelx,nely,nelz)
+
+         do j=1,ny1
+         do k=1,nz1
+         do i=1,nx1
+            u(i,j,k,e) = ua(j,ey)
+         enddo
+         enddo
+         enddo
+
+      enddo
+
+      return
+      end
+c-----------------------------------------------------------------------c
+      subroutine wall_normal_average_s(u,ny,nel,v,w)
+      real u(ny,nel),w(1),v(1)
+      integer e
+
+      k=0
+      do e=1,nel    ! get rid of duplicated (ny,e),(1,e+1) points
+      do i=1,ny-1
+         k=k+1
+         w(k) = u(i,e)
+      enddo
+      enddo
+      k=k+1
+      w(k) = u(ny,nel)
+      n=k
+
+      npass = 2     ! Smooth
+      alpha = 0.2
+
+      do ipass=1,npass
+         do k=2,n-1
+            v(k) = (1.-alpha)*w(k) + 0.5*alpha*(w(k-1)+w(k+1))
+         enddo
+
+         do k=1,n
+            w(k) = v(k)
+         enddo
+      enddo
+
+      k=0
+      do e=1,nel    ! restore duplicated (ny,e),(1,e+1) points
+         do i=1,ny-1
+            k=k+1
+            u(i,e) = w(k)
+         enddo
+      enddo
+      k=k+1
+      u(ny,nel)=w(k)
+
+      do e=1,nel-1    ! restore duplicated (ny,e),(1,e+1) points
+         u(ny,e) = u(1,e+1)
+      enddo
+      return
+      end
+c----------------------------------------------------------------------c
+      subroutine interp_v(uvw,xyz,n) !evaluate velocity for xyz
+
+      include 'SIZE'
+      include 'TOTAL'
+
+      real uvw(ldim,n),xyz(ldim,n)
+      logical ifjac,ifpts
+
+      parameter(nmax=lpart,nfldmax=ldim) 
+      common /rv_intp/ pts(ldim*nmax)
+      common /iv_intp/ ihandle
+      common /outtmp/ wrk(lx1*ly1*lz1*lelt,nfldmax)
+
+      integer icalld,e
+      save    icalld
+      data    icalld /0/
+
+      nxyz  = nx1*ny1*nz1
+      ntot  = nxyz*nelt
+
+      if (n.gt.nmax) call exitti ('ABORT: interp_v() n > nmax!$',n)
+      
+      if (nelgt.ne.nelgv) call exitti
+     $   ('ABORT: interp_v() nelgt.ne.nelgv not yet supported!$',nelgv)
+
+      do i=1,n				! ? not moving -> save?
+         pts(i)     = xyz(1,i)
+         pts(i + n) = xyz(2,i)
+         if (if3d)  pts(i + n*2) = xyz(3,i)
+      enddo
+
+      if (icalld.eq.0) then		! interpolation setup	!? intpts_done(ih_intp_v)?
+        icalld = 1
+        tolin  = 1.e-8
+        call intpts_setup(tolin,ihandle)
+      endif
+
+      nflds  = ndim ! number of fields to interpolate
+
+      ! pack working array
+      call opcopy(wrk(1,1),wrk(1,2),wrk(1,3),vx,vy,vz)
+
+      ! interpolate
+      ifjac  = .true.           ! output transpose (of Jacobian)
+      ifpts  = .true.            ! find points
+      call intpts(wrk,nflds,pts,n,uvw,ifjac,ifpts,ihandle)	! copy array instead?
+
+      return
+      end
+C-----------------------------------------------------------------------
+      subroutine interp_v3v(uvw,xyz,v1,v2,v3,n) ! evaluate vorticity for xyz
+
+      include 'SIZE'
+      include 'TOTAL'
+
+      real uvw(ldim,n),xyz(ldim,n),v1(1),v2(1),v3(1)
+      logical ifjac,ifpts
+
+      parameter(nmax=lpart,nfldmax=ldim) 
+      common /rv_intp/ pts(ldim*nmax)
+      common /iv_intp/ ihandle
+      common /outtmp/ wrk(lx1*ly1*lz1*lelt,nfldmax)
+
+      integer icalld,e
+      save    icalld
+      data    icalld /0/
+
+      nxyz  = nx1*ny1*nz1
+      ntot  = nxyz*nelt
+
+      if (n.gt.nmax) call exitti ('ABORT: interp_v() n > nmax!$',n)
+      
+      if (nelgt.ne.nelgv) call exitti
+     $   ('ABORT: interp_v() nelgt.ne.nelgv not yet supported!$',nelgv)
+
+      do i=1,n                          ! ? not moving -> save?
+         pts(i)     = xyz(1,i)
+         pts(i + n) = xyz(2,i)
+         if (if3d)  pts(i + n*2) = xyz(3,i)
+      enddo
+
+      if (icalld.eq.0) then             ! interpolation setu !? intpts_done(ih_intp_v)?
+        icalld = 1
+        tolin  = 1.e-8
+        call intpts_setup(tolin,ihandle)
+      endif
+
+      nflds  = ndim ! number of fields to interpolate
+
+      ! pack working array
+      call opcopy(wrk(1,1),wrk(1,2),wrk(1,3),v1,v2,v3)
+
+      ! interpolate
+      ifjac  = .true.           ! output transpose (of Jacobian)
+      ifpts  = .true.            ! find points
+      call intpts(wrk,nflds,pts,n,uvw,ifjac,ifpts,ihandle) ! copy array instead?
+
+      return
+      end
+c automatically added by makenek
+      subroutine usrsetvert(glo_num,nel,nx,ny,nz) ! to modify glo_num
+      integer*8 glo_num(1)
+      return
+      end
